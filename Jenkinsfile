@@ -44,22 +44,23 @@ pipeline {
         script {
           def imageTag = "${env.BUILD_NUMBER}-${env.GIT_COMMIT.take(7)}"
           def sourceLocation = "${env.PIPELINE_BUCKET}/bundles/${env.JOB_NAME}/${env.BUILD_NUMBER}/source.zip"
-          def buildId = sh(
-            returnStdout: true,
-            script: '''
-              aws codebuild start-build \
-                --project-name "$CODEBUILD_PROJECT" \
-                --source-type-override S3 \
-                --source-location-override "$SOURCE_LOCATION" \
-                --environment-variables-override name=IMAGE_TAG,value="$IMAGE_TAG",type=PLAINTEXT \
-                --query 'build.id' \
-                --output text
-            ''',
-            environment: [
-              "IMAGE_TAG=${imageTag}",
-              "SOURCE_LOCATION=${sourceLocation}"
-            ]
-          ).trim()
+          def buildId = withEnv([
+            "IMAGE_TAG=${imageTag}",
+            "SOURCE_LOCATION=${sourceLocation}"
+          ]) {
+            sh(
+              returnStdout: true,
+              script: '''
+                aws codebuild start-build \
+                  --project-name "$CODEBUILD_PROJECT" \
+                  --source-type-override S3 \
+                  --source-location-override "$SOURCE_LOCATION" \
+                  --environment-variables-override name=IMAGE_TAG,value="$IMAGE_TAG",type=PLAINTEXT \
+                  --query 'build.id' \
+                  --output text
+              '''
+            ).trim()
+          }
 
           timeout(time: 30, unit: 'MINUTES') {
             waitUntil {
