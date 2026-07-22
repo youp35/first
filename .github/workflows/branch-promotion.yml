@@ -1,0 +1,42 @@
+name: Branch Promotion
+
+on:
+  push:
+    branches:
+      - develop
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: branch-promotion-develop
+  cancel-in-progress: false
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure Git identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Fetch all remote branches
+        run: git fetch origin '+refs/heads/*:refs/remotes/origin/*'
+
+      - name: Sync release from develop
+        run: |
+          git checkout -B release origin/develop
+          git push origin release --force-with-lease
+
+      - name: Sync UAT from release
+        run: |
+          git checkout -B UAT origin/release
+          git push origin UAT --force-with-lease
