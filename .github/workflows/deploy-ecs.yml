@@ -19,6 +19,7 @@ concurrency:
 env:
   AWS_REGION: ap-southeast-1
   ECR_REPOSITORY: hello-world-static-site
+  CONTAINER_NAME: hello-world
 
 jobs:
   deploy:
@@ -36,16 +37,19 @@ jobs:
               echo "TARGET_ENV=development" >> "$GITHUB_ENV"
               echo "ECS_CLUSTER=dev-hello-world-cluster" >> "$GITHUB_ENV"
               echo "ECS_SERVICE=dev-hello-world-service" >> "$GITHUB_ENV"
+              echo "TASK_DEFINITION_FAMILY=dev-hello-world-static-site" >> "$GITHUB_ENV"
               ;;
             UAT)
               echo "TARGET_ENV=uat" >> "$GITHUB_ENV"
               echo "ECS_CLUSTER=uat-hello-world-cluster" >> "$GITHUB_ENV"
               echo "ECS_SERVICE=uat-hello-world-service" >> "$GITHUB_ENV"
+              echo "TASK_DEFINITION_FAMILY=uat-hello-world-static-site" >> "$GITHUB_ENV"
               ;;
             Deployment)
               echo "TARGET_ENV=deployment" >> "$GITHUB_ENV"
               echo "ECS_CLUSTER=prd-hello-world-cluster" >> "$GITHUB_ENV"
               echo "ECS_SERVICE=prd-hello-world-service" >> "$GITHUB_ENV"
+              echo "TASK_DEFINITION_FAMILY=prd-hello-world-static-site" >> "$GITHUB_ENV"
               ;;
             *)
               echo "Unsupported branch: ${GITHUB_REF_NAME}" >&2
@@ -59,12 +63,13 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
           role-to-assume: ${{ secrets.AWS_GITHUB_ACTIONS_ROLE_ARN }}
 
-      - name: Resolve AWS account and ECR registry
+      - name: Resolve AWS account and image URI
         shell: bash
         run: |
           AWS_ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
+          IMAGE_URI="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPOSITORY}"
           echo "AWS_ACCOUNT_ID=${AWS_ACCOUNT_ID}" >> "$GITHUB_ENV"
-          echo "ECR_REGISTRY=${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com" >> "$GITHUB_ENV"
+          echo "IMAGE_URI=${IMAGE_URI}" >> "$GITHUB_ENV"
           echo "IMAGE_TAG=${GITHUB_SHA}" >> "$GITHUB_ENV"
 
       - name: Login to Amazon ECR
@@ -73,17 +78,48 @@ jobs:
       - name: Build and push Docker image
         shell: bash
         run: |
-          IMAGE_URI="${ECR_REGISTRY}/${ECR_REPOSITORY}"
           docker build -t "${IMAGE_URI}:${IMAGE_TAG}" .
           docker tag "${IMAGE_URI}:${IMAGE_TAG}" "${IMAGE_URI}:latest"
           docker push "${IMAGE_URI}:${IMAGE_TAG}"
           docker push "${IMAGE_URI}:latest"
 
-      - name: Deploy to ECS service
+      - name: Download current ECS task definition
+        shell: bash
+        run: |
+          aws ecs describe-task-definition \
+            --task-definition "${TASK_DEFINITION_FAMILY}" \
+            --query 'taskDefinition' \
+            --output json > task-definition.json
+
+      - name: Render new task definition image
+        shell: bash
+        run: |
+          jq \
+            --arg IMAGE_URI "${IMAGE_URI}:${IMAGE_TAG}" \
+            --arg CONTAINER_NAME "${CONTAINER_NAME}" \
+            'del(.taskDefinitionArn, .revision, .status, .requiresAttributes, .compatibilities, .registeredAt, .registeredBy) | .containerDefinitions |= map(if .name == $CONTAINER_NAME then .image = $IMAGE_URI else . end)' \
+            task-definition.json > task-definition.rendered.json
+
+      - name: Register task definition revision
+        shell: bash
+        run: |
+          TASK_DEFINITION_ARN="$(aws ecs register-task-definition --cli-input-json file://task-definition.rendered.json --query 'taskDefinition.taskDefinitionArn' --output text)"
+          echo "TASK_DEFINITION_ARN=${TASK_DEFINITION_ARN}" >> "$GITHUB_ENV"
+
+      - name: Deploy image to ECS service
         shell: bash
         run: |
           aws ecs update-service \
             --cluster "${ECS_CLUSTER}" \
             --service "${ECS_SERVICE}" \
+            --task-definition "${TASK_DEFINITION_ARN}" \
             --force-new-deployment \
+            --region "${AWS_REGION}"
+
+      - name: Wait for ECS service stability
+        shell: bash
+        run: |
+          aws ecs wait services-stable \
+            --cluster "${ECS_CLUSTER}" \
+            --services "${ECS_SERVICE}" \
             --region "${AWS_REGION}"
