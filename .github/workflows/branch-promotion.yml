@@ -4,13 +4,14 @@ on:
   push:
     branches:
       - develop
+      - UAT
   workflow_dispatch:
 
 permissions:
   contents: write
 
 concurrency:
-  group: branch-promotion-develop
+  group: branch-promotion-${{ github.ref_name }}
   cancel-in-progress: false
 
 jobs:
@@ -32,11 +33,19 @@ jobs:
         run: git fetch origin '+refs/heads/*:refs/remotes/origin/*'
 
       - name: Sync release from develop
+        if: github.ref_name == 'develop'
         run: |
           git checkout -B release origin/develop
           git push origin release --force-with-lease
 
       - name: Sync UAT from release
+        if: github.ref_name == 'develop'
         run: |
           git checkout -B UAT origin/release
           git push origin UAT --force-with-lease
+
+      - name: Sync Deployment from UAT
+        if: github.ref_name == 'UAT'
+        run: |
+          git checkout -B Deployment origin/UAT
+          git push origin Deployment --force-with-lease
