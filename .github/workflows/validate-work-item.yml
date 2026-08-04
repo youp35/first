@@ -31,7 +31,6 @@ jobs:
 
       - name: Validate commit references
         env:
-          BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
           HEAD_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
@@ -46,7 +45,6 @@ jobs:
           import urllib.error
           import urllib.request
 
-          base_sha = os.environ.get('BASE_SHA', '').strip()
           head_sha = os.environ.get('HEAD_SHA', '').strip()
           repository = os.environ['GITHUB_REPOSITORY']
           token = os.environ['GITHUB_TOKEN']
@@ -55,21 +53,15 @@ jobs:
             print('HEAD_SHA is missing')
             sys.exit(1)
 
-          revision_range = head_sha
-          zero_sha = '0' * 40
-          if base_sha and base_sha != zero_sha:
-            revision_range = f'{base_sha}..{head_sha}'
-
           log_output = subprocess.check_output(
-            ['git', 'log', '--format=%H%x09%s', revision_range],
+            ['git', 'log', '-1', '--format=%H%x09%s', head_sha],
             text=True,
           ).strip()
 
           commits = []
           if log_output:
-            for line in log_output.splitlines():
-              sha, subject = line.split('\t', 1)
-              commits.append((sha, subject.strip()))
+            sha, subject = log_output.split('\t', 1)
+            commits.append((sha, subject.strip()))
 
           if not commits:
             single_subject = subprocess.check_output(
